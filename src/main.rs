@@ -4,6 +4,8 @@ use wasmtime::{component::Component, *};
 
 static GUEST_BYTES: &[u8] = include_bytes!("../bin/guest.wasm");
 
+struct Host;
+
 fn main() -> Result<(), Box<dyn Error>> {
     use tracing_subscriber::{prelude::*, registry, EnvFilter};
     use tracing_tree::HierarchicalLayer;
@@ -26,7 +28,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let engine = Engine::new(&config)?;
 
     tracing::info!("create store");
-    let mut store = Store::new(&engine, ());
+    let mut store = Store::new(&engine, Host);
 
     tracing::info!("create component");
     let component = Component::new(&engine, GUEST_BYTES)?;
@@ -38,7 +40,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut root = linker.root();
 
-    root.func_wrap("print", |_: StoreContextMut<'_, ()>, msg: (String,)| {
+    root.func_wrap("print", |_: StoreContextMut<'_, Host>, msg: (String,)| {
         tracing::info!(target: "guest", "{msg:?}");
         Ok(())
     })
@@ -50,6 +52,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     .unwrap();
 
     // Create an instance of the component using the linker.
+    // Main::add_to_linker(&mut linker, |v: &mut Host| v)?;
+    // let (bindings, _) = Main::instantiate(&mut store, &component, &linker)?;
     let instance = linker.instantiate(&mut store, &component)?;
 
     tracing::info!("Finished instantiating component");
@@ -72,6 +76,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             .call(&mut store, (vec!["guest".into(), "Hello".into()],))
             .context("Failed to call `run`")?;
 
+        func_run.post_return(&mut store)?;
+
         tracing::info!(?result, "result");
 
         assert_eq!(result, Ok(42));
@@ -84,6 +90,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             .call(&mut store, ())
             .context("Failed to call `get-name`")?;
         tracing::info!("received name: {result:?}");
+
+        func_get_name.post_return(&mut store)?;
 
         assert_eq!(result, "guest-module");
 
