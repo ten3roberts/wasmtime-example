@@ -1,0 +1,85 @@
+{
+    "run": {
+        "cmd": [
+            "cargo",
+            "run",
+            "--package",
+            "wasmtime-example",
+            "--bin",
+            "wasmtime-example"
+        ],
+        "depends_on": [
+            "build guest"
+        ]
+    },
+    "build": {
+        "cmd": [
+            "cargo",
+            "build",
+            "--package",
+            "wasmtime-example",
+            "--bin",
+            "wasmtime-example"
+        ],
+        "depends_on": [
+            "build guest"
+        ]
+    },
+    "build guest": {
+        "cmd": [
+            "./build_guest.sh"
+        ],
+        "components": {
+            "qf": {
+                "compiler": "cargo"
+            }
+        }
+    },
+    "build app": {
+        "cmd": [
+            "./build_app.sh"
+        ],
+        "components": {
+            "qf": {
+                "compiler": "cargo"
+            }
+        },
+        "depends_on": [
+            "build guest"
+        ]
+    },
+    "serve app": {
+        "cmd": [
+            "python3",
+            "-m",
+            "http.server"
+        ],
+        "cwd": "./public"
+    },
+    "debug wasmtime-example": {
+        "cmd": "cargo build -p wasmtime-example",
+        "components": {
+            "dap": {
+                "program": "./target/debug/wasmtime-example",
+                "adapter": "rust"
+            }
+        }
+    },
+    "build test components": {
+        "cmd": "./build_test_components.sh",
+        "cwd": "./scripting-tests/"
+    },
+    "test": {
+        "cmd": "cargo test --workspace",
+        "depends_on": [
+            "build test components"
+        ]
+    },
+    "test wasm": {
+        "cmd": "wasm-pack test --node",
+        "depends_on": [
+            "build test components"
+        ],
+        "cwd": "./scripting-tests/"
+    }
+}

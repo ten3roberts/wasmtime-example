@@ -1,66 +1,94 @@
+use anyhow::Context;
 use std::error::Error;
-use wasmtime::*;
+use wasmtime::{component::Component, *};
 
-#[derive(Debug)]
-struct Data(String);
+static GUEST_BYTES: &[u8] = include_bytes!("../bin/guest.wasm");
 
 fn main() -> Result<(), Box<dyn Error>> {
-    // An engine stores and configures global compilation settings like
-    // optimization level, enabled wasm features, etc.
-    let engine = Engine::default();
+    use tracing_subscriber::{prelude::*, registry, EnvFilter};
+    use tracing_tree::HierarchicalLayer;
 
-    // We start off by creating a `Module` which represents a compiled form
-    // of our input wasm module. In this case it'll be JIT-compiled after
-    // we parse the text format.
-    let module = Module::from_file(&engine, "guest.wat")?;
-    let mut linker = Linker::new(&engine);
+    registry()
+        .with(EnvFilter::from_default_env())
+        .with(
+            HierarchicalLayer::new(4)
+                .with_indent_lines(true)
+                .with_span_retrace(true),
+        )
+        .init();
 
-    linker.func_wrap("", "call-host", |mut ctx: Caller<Data>, param: i32| {
-        eprintln!("call-host {param}");
-        let data = ctx.data_mut();
+    let mut config = Config::default();
+    config
+        .wasm_component_model(true)
+        .wasm_backtrace(true)
+        .wasm_backtrace_details(WasmBacktraceDetails::Enable);
 
-        eprintln!("data at entry: {data:?}");
-        data.0.push_str("ha");
+    let engine = Engine::new(&config)?;
 
-        if param > 0 {
-            ctx.get_export("run2")
-                .unwrap()
-                .into_func()
-                .unwrap()
-                .call(&mut ctx, &[], &mut [])
-                .unwrap();
-        }
+    tracing::info!("create store");
+    let mut store = Store::new(&engine, ());
 
-        let data = ctx.data_mut();
-        eprintln!("data at exit: {data:?}");
-        assert_eq!(data.0, "haha");
+    tracing::info!("create component");
+    let component = Component::new(&engine, GUEST_BYTES)?;
+
+    // Create a linker that will be used to resolve the component's imports, if any.
+    let mut linker = component::Linker::new(&engine);
+
+    tracing::info!("Defining imports");
+
+    let mut root = linker.root();
+
+    root.func_wrap("print", |_: StoreContextMut<'_, ()>, msg: (String,)| {
+        tracing::info!(target: "guest", "{msg:?}");
+        Ok(())
+    })
+    .unwrap();
+
+    root.func_wrap("get-value", |_, (key,): (u32,)| {
+        Ok((((key as u64) * (key as u64), (key as f32).sqrt()),))
+    })
+    .unwrap();
+
+    // Create an instance of the component using the linker.
+    let instance = linker.instantiate(&mut store, &component)?;
+
+    tracing::info!("Finished instantiating component");
+
+    let func_run;
+
+    let func_get_name;
+
+    {
+        let mut exports = instance.exports(&mut store);
+        let mut interface = exports.root();
+        func_run = interface.typed_func::<(Vec<String>,), (Result<i32, String>,)>("run")?;
+        func_get_name = interface.typed_func::<(), (String,)>("get-name")?;
+    }
+
+    tracing::info!("Calling run");
+
+    tracing::info_span!("run").in_scope(|| {
+        let (result,) = func_run
+            .call(&mut store, (vec!["guest".into(), "Hello".into()],))
+            .context("Failed to call `run`")?;
+
+        tracing::info!(?result, "result");
+
+        assert_eq!(result, Ok(42));
+
+        anyhow::Ok(())
     })?;
 
-    // A `Store` is what will own instances, functions, globals, etc. All wasm
-    // items are stored within a `Store`, and it's what we'll always be using to
-    // interact with the wasm world. Custom data can be stored in stores but for
-    // now we just use `()`.
-    let mut store = Store::new(&engine, Data(String::new()));
-    let instance = linker.instantiate(&mut store, &module).unwrap();
+    tracing::info_span!("get-name").in_scope(|| {
+        let (result,) = func_get_name
+            .call(&mut store, ())
+            .context("Failed to call `get-name`")?;
+        tracing::info!("received name: {result:?}");
 
-    // With a compiled `Module` we can then instantiate it, creating
-    // an `Instance` which we can actually poke at functions on.
+        assert_eq!(result, "guest-module");
 
-    // The `Instance` gives us access to various exported functions and items,
-    // which we access here to pull out our `answer` exported function and
-    // run it.
-    let answer = instance
-        .get_func(&mut store, "run")
-        .expect("`answer` was not an exported function");
+        anyhow::Ok(())
+    })?;
 
-    // There's a few ways we can call the `answer` `Func` value. The easiest
-    // is to statically assert its signature with `typed` (in this case
-    // asserting it takes no arguments and returns one i32) and then call it.
-    let answer = answer.typed::<(), i32>(&store)?;
-
-    // And finally we can call our function! Note that the error propagation
-    // with `?` is done to handle the case where the wasm function traps.
-    let result = answer.call(&mut store, ())?;
-    println!("Answer: {:?}", result);
     Ok(())
 }

@@ -1,0 +1,10 @@
+package example:host;
+
+world main {
+    import get-value: func(key: u32) -> tuple<u64, float32>;
+    import print: func(msg: string);
+
+    export run: func(args: list<string>) -> result<s32, string>;
+
+    export get-name: func() -> string;
+}

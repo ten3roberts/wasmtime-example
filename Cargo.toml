@@ -6,4 +6,11 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-wasmtime = "15.0.0"
+wasmtime = { version = "15.0.0", features = ["component-model"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-tree = "0.3"
+anyhow = { version = "1.0", features = ["backtrace"] }
+
+[workspace]
+members = [ "./guest" ]
